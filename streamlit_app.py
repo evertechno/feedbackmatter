@@ -1,151 +1,99 @@
 import streamlit as st
+import requests
+import json
 import pandas as pd
-import math
-from pathlib import Path
+from datetime import datetime
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Jira API Credentials (Replace with your own)
+JIRA_URL = "https://your-domain.atlassian.net"  # Replace with your JIRA domain
+JIRA_API_TOKEN = "your-api-token"  # Replace with your JIRA API token
+JIRA_USER_EMAIL = "your-email@example.com"  # Replace with your JIRA email
+JIRA_PROJECT_KEY = "PROJECT_KEY"  # Replace with your JIRA project key (e.g., 'PROJ')
+JIRA_ISSUE_TYPE = "Task"  # Replace with the desired issue type (e.g., 'Story', 'Bug')
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Streamlit App UI
+st.title("Advanced Product Feedback Collection System")
+st.write("Please provide your feedback to help improve our product.")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# Feedback Form
+with st.form(key="feedback_form"):
+    st.subheader("Please fill out the following feedback form:")
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+    # Collecting advanced feedback metrics
+    satisfaction = st.slider("How satisfied are you with the product?", min_value=1, max_value=5, step=1)
+    usability = st.slider("How easy is the product to use?", min_value=1, max_value=5, step=1)
+    feature_feedback = st.text_area("What features do you like the most?", height=100)
+    improvement_suggestions = st.text_area("Any suggestions for improvement?", height=100)
+    username = st.text_input("Please enter your Username")
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    # Submit button
+    submit_button = st.form_submit_button(label="Submit Feedback")
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+if submit_button:
+    st.write("Thank you for your feedback!")
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
+    # Combine feedback into a single string
+    feedback = (
+        f"Satisfaction Rating: {satisfaction}\n"
+        f"Usability Rating: {usability}\n"
+        f"Features Liked: {feature_feedback}\n"
+        f"Suggestions for Improvement: {improvement_suggestions}\n"
     )
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+    # Add timestamp and username
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    feedback_with_meta = f"Timestamp: {timestamp}\nUsername: {username}\n\n{feedback}"
 
-    return gdp_df
+    # JIRA API - Create issue
+    jira_data = {
+        "fields": {
+            "project": {
+                "key": JIRA_PROJECT_KEY
+            },
+            "summary": f"User Feedback - {username}",
+            "description": feedback_with_meta,
+            "issuetype": {
+                "name": JIRA_ISSUE_TYPE
+            }
+        }
+    }
 
-gdp_df = get_gdp_data()
+    # JIRA Authentication
+    auth = (JIRA_USER_EMAIL, JIRA_API_TOKEN)
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+    # Make a POST request to create the issue
+    response = requests.post(
+        f"{JIRA_URL}/rest/api/3/issue",
+        headers={"Content-Type": "application/json"},
+        auth=auth,
+        data=json.dumps(jira_data)
+    )
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+    if response.status_code == 201:
+        st.success("Feedback has been submitted and a JIRA ticket has been created successfully!")
+    else:
+        st.error(f"Failed to create JIRA ticket: {response.status_code}, {response.text}")
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+    # Log feedback to CSV (optional)
+    feedback_data = {
+        "timestamp": [timestamp],
+        "username": [username],
+        "satisfaction": [satisfaction],
+        "usability": [usability],
+        "feature_feedback": [feature_feedback],
+        "improvement_suggestions": [improvement_suggestions]
+    }
+    feedback_df = pd.DataFrame(feedback_data)
+    feedback_df.to_csv("feedback.csv", mode='a', header=False, index=False)
 
-# Add some spacing
-''
-''
+    # Optional: Display the submitted feedback to the user
+    st.subheader("Your Feedback:")
+    st.write(feedback_with_meta)
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+# Option to view previously collected feedback
+if st.button("View Collected Feedback"):
+    try:
+        feedback_df = pd.read_csv("feedback.csv")
+        st.write(feedback_df.tail(10))  # Show last 10 feedback entries
+    except Exception as e:
+        st.error(f"Error loading feedback data: {e}")
